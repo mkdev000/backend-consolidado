@@ -24,7 +24,7 @@ router.post("/api/enlaces", (req, res) => {
     res.status(201).json({
       urlOriginal,
       codigoCorto,
-      urlCorta: `https://rutlink-backend.onrender.com/${codigoCorto}`,
+      urlCorta: `https://backend-consolidado.onrender.com/${codigoCorto}`,
     });
   });
 });
