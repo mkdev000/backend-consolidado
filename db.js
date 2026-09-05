@@ -12,7 +12,7 @@ const configBase = {
 
 const poolRutlink = mysql.createPool({
     ...configBase,
-    database: 'acortador_urls'
+    database: 'defaultdb'
 });
 
 const poolTareas = mysql.createPool({
