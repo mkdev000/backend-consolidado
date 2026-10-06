@@ -17,7 +17,8 @@ const poolRutlink = mysql.createPool({
 
 const poolTareas = mysql.createPool({
     ...configBase,
-    database: 'gestor_tareas'
+    // En tu ordenador (.env) usa la copia de pruebas; en Render, sin variable, usa la real
+    database: process.env.DB_NAME_TAREAS || 'gestor_tareas'
 });
 
 module.exports = { poolRutlink, poolTareas };
