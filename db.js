@@ -25,4 +25,5 @@ const poolTareas = mysql.createPool({
 // (const [filas] = await dbTareas.query(...)) en lugar de callbacks.
 const dbTareas = poolTareas.promise();
 
-module.exports = { poolRutlink, poolTareas, dbTareas };
+// configBase también se exporta para el script de migraciones (scripts/migrar.js)
+module.exports = { poolRutlink, poolTareas, dbTareas, configBase };
