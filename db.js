@@ -21,4 +21,8 @@ const poolTareas = mysql.createPool({
     database: process.env.DB_NAME_TAREAS || 'gestor_tareas'
 });
 
-module.exports = { poolRutlink, poolTareas };
+// Versión con promesas del pool de tareas: permite usar async/await
+// (const [filas] = await dbTareas.query(...)) en lugar de callbacks.
+const dbTareas = poolTareas.promise();
+
+module.exports = { poolRutlink, poolTareas, dbTareas };
