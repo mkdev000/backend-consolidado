@@ -29,7 +29,8 @@ after(async () => {
             'DELETE t FROM tareas t JOIN usuarios u ON u.id = t.user_id WHERE u.email IN (?)',
             [emails]
         );
-        // Al borrar el usuario, sus categorías se borran solas (ON DELETE CASCADE)
+        // Al borrar el usuario, se borran solos (ON DELETE CASCADE) sus categorías, historial,
+        // cierres de semana, cuenta de Google y dispositivos de avisos
         await dbTareas.query('DELETE FROM usuarios WHERE email IN (?)', [emails]);
     }
     await poolTareas.end(); // cierra las conexiones para que la prueba termine
@@ -162,6 +163,72 @@ test('registro, login y tareas de principio a fin', opciones, async (t) => {
         }
     });
 
+    await t.test('ajustes, historial, cierres, Google y avisos: reglas de la base de datos', async () => {
+        const [[usuario]] = await dbTareas.query(
+            'SELECT id, tema, idioma, zona_horaria, avisos_activos, copia_drive_activa FROM usuarios WHERE email = ?',
+            [ana.email]
+        );
+        // Ajustes por defecto de un usuario nuevo (como en el prototipo)
+        assert.strictEqual(usuario.tema, 'nube');
+        assert.strictEqual(usuario.idioma, 'es');
+        assert.strictEqual(usuario.zona_horaria, 'Europe/Madrid');
+        assert.strictEqual(usuario.avisos_activos, 1);
+        assert.strictEqual(usuario.copia_drive_activa, 0);
+        // Un tema que no existe no se puede guardar
+        await assert.rejects(dbTareas.query("UPDATE usuarios SET tema = 'neon' WHERE id = ?", [usuario.id]));
+
+        // Historial: un evento "completada" de la tarea
+        await dbTareas.query(
+            "INSERT INTO tarea_eventos (user_id, tarea_id, tipo) VALUES (?, ?, 'completada')",
+            [usuario.id, idTarea]
+        );
+
+        // Cierre de semana: semana_inicio tiene que ser lunes, y solo uno por semana
+        await assert.rejects(
+            dbTareas.query("INSERT INTO cierres_semana (user_id, semana_inicio) VALUES (?, '2026-10-07')", [usuario.id]),
+            (error) => error.code === 'ER_CHECK_CONSTRAINT_VIOLATED'
+        );
+        await dbTareas.query("INSERT INTO cierres_semana (user_id, semana_inicio) VALUES (?, '2026-10-05')", [usuario.id]);
+        await assert.rejects(
+            dbTareas.query("INSERT INTO cierres_semana (user_id, semana_inicio) VALUES (?, '2026-10-05')", [usuario.id]),
+            (error) => error.code === 'ER_DUP_ENTRY'
+        );
+
+        // Avisos: solo direcciones https, y la misma no se repite
+        await assert.rejects(
+            dbTareas.query(
+                'INSERT INTO suscripciones_push (user_id, endpoint, clave_p256dh, clave_auth) VALUES (?, ?, ?, ?)',
+                [usuario.id, 'http://inseguro.test/x', 'p', 'a']
+            ),
+            (error) => error.code === 'ER_CHECK_CONSTRAINT_VIOLATED'
+        );
+        const endpoint = `https://push.test/${marca}`;
+        await dbTareas.query(
+            'INSERT INTO suscripciones_push (user_id, endpoint, clave_p256dh, clave_auth) VALUES (?, ?, ?, ?)',
+            [usuario.id, endpoint, 'p', 'a']
+        );
+        await assert.rejects(
+            dbTareas.query(
+                'INSERT INTO suscripciones_push (user_id, endpoint, clave_p256dh, clave_auth) VALUES (?, ?, ?, ?)',
+                [usuario.id, endpoint, 'p', 'a']
+            ),
+            (error) => error.code === 'ER_DUP_ENTRY'
+        );
+
+        // Google: una sola cuenta de Google por usuario
+        await dbTareas.query(
+            'INSERT INTO cuentas_google (user_id, google_sub, email_google) VALUES (?, ?, ?)',
+            [usuario.id, `sub-${marca}`, 'ana@gmail.test']
+        );
+        await assert.rejects(
+            dbTareas.query(
+                'INSERT INTO cuentas_google (user_id, google_sub, email_google) VALUES (?, ?, ?)',
+                [usuario.id, `otro-sub-${marca}`, 'ana2@gmail.test']
+            ),
+            (error) => error.code === 'ER_DUP_ENTRY'
+        );
+    });
+
     await t.test('borrar mi tarea y que ya no exista (y sus subtareas y uniones tampoco)', async () => {
         const borrar = await request(app).delete(`/api/tareas/${idTarea}`).set('Authorization', `Bearer ${tokenAna}`);
         assert.strictEqual(borrar.status, 200);
@@ -173,5 +240,13 @@ test('registro, login y tareas de principio a fin', opciones, async (t) => {
         const [[{ uniones }]] = await dbTareas.query('SELECT COUNT(*) AS uniones FROM tarea_categorias WHERE tarea_id = ?', [idTarea]);
         assert.strictEqual(subtareas, 0);
         assert.strictEqual(uniones, 0);
+
+        // El historial se conserva para las estadísticas, pero ya sin apuntar a la tarea borrada
+        const [eventos] = await dbTareas.query(
+            "SELECT tarea_id FROM tarea_eventos e JOIN usuarios u ON u.id = e.user_id WHERE u.email = ? AND e.tipo = 'completada'",
+            [ana.email]
+        );
+        assert.strictEqual(eventos.length, 1);
+        assert.strictEqual(eventos[0].tarea_id, null);
     });
 });
