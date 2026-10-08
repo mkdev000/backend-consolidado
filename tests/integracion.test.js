@@ -29,6 +29,7 @@ after(async () => {
             'DELETE t FROM tareas t JOIN usuarios u ON u.id = t.user_id WHERE u.email IN (?)',
             [emails]
         );
+        // Al borrar el usuario, sus categorías se borran solas (ON DELETE CASCADE)
         await dbTareas.query('DELETE FROM usuarios WHERE email IN (?)', [emails]);
     }
     await poolTareas.end(); // cierra las conexiones para que la prueba termine
@@ -111,10 +112,66 @@ test('registro, login y tareas de principio a fin', opciones, async (t) => {
         );
     });
 
-    await t.test('borrar mi tarea y que ya no exista', async () => {
+    await t.test('subtareas y categorías: reglas de la base de datos', async () => {
+        const [[{ id: idAna }]] = await dbTareas.query('SELECT id FROM usuarios WHERE email = ?', [ana.email]);
+        const [[{ id: idLuis }]] = await dbTareas.query('SELECT id FROM usuarios WHERE email = ?', [luis.email]);
+
+        // Dos subtareas en la tarea de Ana
+        await dbTareas.query(
+            'INSERT INTO subtareas (tarea_id, titulo, orden) VALUES (?, ?, 0), (?, ?, 1)',
+            [idTarea, 'Primer paso', idTarea, 'Segundo paso']
+        );
+        // Una subtarea con el título vacío no se puede guardar
+        await assert.rejects(
+            dbTareas.query('INSERT INTO subtareas (tarea_id, titulo) VALUES (?, ?)', [idTarea, '   ']),
+            (error) => error.code === 'ER_CHECK_CONSTRAINT_VIOLATED'
+        );
+
+        // Categoría de Ana. La misma con otras mayúsculas o tildes cuenta como repetida.
+        const [catAna] = await dbTareas.query(
+            'INSERT INTO categorias (user_id, nombre, color) VALUES (?, ?, ?)', [idAna, 'iLerna', '#17699e']
+        );
+        await assert.rejects(
+            dbTareas.query('INSERT INTO categorias (user_id, nombre) VALUES (?, ?)', [idAna, 'ÍLERNA']),
+            (error) => error.code === 'ER_DUP_ENTRY'
+        );
+        // Un color que no es #RRGGBB no se puede guardar
+        await assert.rejects(
+            dbTareas.query('INSERT INTO categorias (user_id, nombre, color) VALUES (?, ?, ?)', [idAna, 'Casa', 'rojo']),
+            (error) => error.code === 'ER_CHECK_CONSTRAINT_VIOLATED'
+        );
+
+        // Unir la tarea de Ana con su categoría: permitido
+        await dbTareas.query(
+            'INSERT INTO tarea_categorias (tarea_id, categoria_id, user_id) VALUES (?, ?, ?)',
+            [idTarea, catAna.insertId, idAna]
+        );
+
+        // Luis NO puede unir la tarea de Ana a una categoría suya (ni haciéndose pasar por Ana)
+        const [catLuis] = await dbTareas.query(
+            'INSERT INTO categorias (user_id, nombre) VALUES (?, ?)', [idLuis, 'Secreta']
+        );
+        for (const usuario of [idLuis, idAna]) {
+            await assert.rejects(
+                dbTareas.query(
+                    'INSERT INTO tarea_categorias (tarea_id, categoria_id, user_id) VALUES (?, ?, ?)',
+                    [idTarea, catLuis.insertId, usuario]
+                ),
+                (error) => error.code === 'ER_NO_REFERENCED_ROW_2'
+            );
+        }
+    });
+
+    await t.test('borrar mi tarea y que ya no exista (y sus subtareas y uniones tampoco)', async () => {
         const borrar = await request(app).delete(`/api/tareas/${idTarea}`).set('Authorization', `Bearer ${tokenAna}`);
         assert.strictEqual(borrar.status, 200);
         const otraVez = await request(app).delete(`/api/tareas/${idTarea}`).set('Authorization', `Bearer ${tokenAna}`);
         assert.strictEqual(otraVez.status, 404);
+
+        // ON DELETE CASCADE: al borrar la tarea, se borran sus subtareas y sus uniones con categorías
+        const [[{ subtareas }]] = await dbTareas.query('SELECT COUNT(*) AS subtareas FROM subtareas WHERE tarea_id = ?', [idTarea]);
+        const [[{ uniones }]] = await dbTareas.query('SELECT COUNT(*) AS uniones FROM tarea_categorias WHERE tarea_id = ?', [idTarea]);
+        assert.strictEqual(subtareas, 0);
+        assert.strictEqual(uniones, 0);
     });
 });
