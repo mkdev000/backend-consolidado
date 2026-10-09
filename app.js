@@ -20,8 +20,14 @@ app.use('/', rutasRutlink);
 // Gestor de tareas
 const authRoutes = require('./tareas/routes/auth');
 const tareasRoutes = require('./tareas/routes/tareas');
+const subtareasRoutes = require('./tareas/routes/subtareas');
+const categoriasRoutes = require('./tareas/routes/categorias');
+const ajustesRoutes = require('./tareas/routes/ajustes');
 app.use('/api/auth', authRoutes);
 app.use('/api/tareas', tareasRoutes);
+app.use('/api/subtareas', subtareasRoutes);
+app.use('/api/categorias', categoriasRoutes);
+app.use('/api/ajustes', ajustesRoutes);
 
 // Manejador de errores (siempre el último).
 // Si algo falla y nadie lo ha controlado, responde con un JSON genérico

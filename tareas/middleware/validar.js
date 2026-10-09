@@ -10,9 +10,9 @@ function validar(esquema) {
         if (!resultado.success) {
             const errores = resultado.error.issues.map((problema) => ({
                 campo: problema.path.join('.') || null,
-                // Si el problema es el cuerpo entero (por ejemplo, llega una lista en vez de un objeto),
-                // usamos un mensaje propio en español en lugar del de Zod.
-                mensaje: problema.path.length === 0
+                // Si el cuerpo entero tiene el tipo equivocado (por ejemplo, llega una lista en vez de
+                // un objeto), usamos un mensaje propio en español en lugar del de Zod.
+                mensaje: problema.path.length === 0 && problema.code === 'invalid_type'
                     ? 'Los datos enviados no tienen el formato correcto'
                     : problema.message,
             }));
