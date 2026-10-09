@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { dbTareas } = require('../../db');
 const verificarToken = require('../middleware/verificarToken');
+const validar = require('../middleware/validar');
+const { esquemaTarea } = require('../validacion/esquemas');
 
 // Convierte el :id de la URL en número. Solo acepta dígitos ("15"), nada de "1e3", " 5" o "0x10".
 // Devuelve null si no es un entero positivo válido.
@@ -18,13 +20,10 @@ function registrarError(donde, error) {
 }
 
 // Crear tarea
-router.post('/', verificarToken, async (req, res) => {
-    const { titulo, descripcion, estado, prioridad, proyecto, fecha_limite, hora_limite } = req.body ?? {};
+// Orden: primero el token (¿quién eres?) y después las normas de los datos (¿qué envías?)
+router.post('/', verificarToken, validar(esquemaTarea), async (req, res) => {
+    const { titulo, descripcion, estado, prioridad, proyecto, fecha_limite, hora_limite } = req.datos;
     const userId = req.usuario.id;
-
-    if (typeof titulo !== 'string' || titulo.trim() === '') {
-        return res.status(400).json({ mensaje: 'El título es obligatorio' });
-    }
 
     try {
         const [resultado] = await dbTareas.query(
@@ -56,16 +55,13 @@ router.get('/', verificarToken, async (req, res) => {
 });
 
 // Editar una tarea MÍA
-router.put('/:id', verificarToken, async (req, res) => {
+router.put('/:id', verificarToken, validar(esquemaTarea), async (req, res) => {
     const userId = req.usuario.id;
     const tareaId = leerId(req.params.id);
-    const { titulo, descripcion, estado, prioridad, proyecto, fecha_limite, hora_limite } = req.body ?? {};
+    const { titulo, descripcion, estado, prioridad, proyecto, fecha_limite, hora_limite } = req.datos;
 
     if (tareaId === null) {
         return res.status(400).json({ mensaje: 'Identificador de tarea no válido' });
-    }
-    if (typeof titulo !== 'string' || titulo.trim() === '') {
-        return res.status(400).json({ mensaje: 'El título es obligatorio' });
     }
 
     try {

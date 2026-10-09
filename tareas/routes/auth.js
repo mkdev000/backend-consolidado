@@ -3,14 +3,13 @@ const router = express.Router();
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { dbTareas } = require('../../db');
+const validar = require('../middleware/validar');
+const { esquemaRegistro, esquemaLogin } = require('../validacion/esquemas');
 
 // Hash falso: si el email no existe, comparamos igualmente contra este hash.
 // Así el login tarda lo mismo exista o no el email, y nadie puede averiguar
 // qué emails están registrados midiendo el tiempo de respuesta.
 const HASH_FALSO = bcrypt.hashSync('usuario-que-no-existe', 10);
-
-// true si el valor es un texto con algo escrito
-const esTexto = (valor) => typeof valor === 'string' && valor.trim() !== '';
 
 // Registra el error SIN volcar la consulta SQL completa
 // (podría incluir el email o el hash de la contraseña).
@@ -18,12 +17,9 @@ function registrarError(donde, error) {
     console.error(`[auth/${donde}]`, error.code ?? '', error.message);
 }
 
-router.post('/register', async (req, res) => {
-    const { nombre, email, contrasena } = req.body ?? {};
-
-    if (!esTexto(nombre) || !esTexto(email) || !esTexto(contrasena)) {
-        return res.status(400).json({ mensaje: 'Faltan datos obligatorios' });
-    }
+// validar(esquemaRegistro): nombre, email válido y contraseña segura (requisitos del prototipo)
+router.post('/register', validar(esquemaRegistro), async (req, res) => {
+    const { nombre, email, contrasena } = req.datos;
 
     try {
         const contrasenaHasheada = await bcrypt.hash(contrasena, 10);
@@ -43,12 +39,9 @@ router.post('/register', async (req, res) => {
     }
 });
 
-router.post('/login', async (req, res) => {
-    const { email, contrasena } = req.body ?? {};
-
-    if (!esTexto(email) || !esTexto(contrasena)) {
-        return res.status(400).json({ mensaje: 'Faltan datos obligatorios' });
-    }
+// validar(esquemaLogin): email y contraseña son textos de tamaño razonable
+router.post('/login', validar(esquemaLogin), async (req, res) => {
+    const { email, contrasena } = req.datos;
 
     try {
         const [filas] = await dbTareas.query(

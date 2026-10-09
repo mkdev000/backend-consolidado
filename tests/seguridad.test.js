@@ -87,3 +87,33 @@ test('ids raros como 1e3, 0x10 o 0 devuelven 400', async () => {
         assert.strictEqual(res.status, 400, `el id "${idRaro}" debería dar 400`);
     }
 });
+
+test('registro con contraseña débil devuelve 400 y explica qué falta', async () => {
+    const res = await request(app)
+        .post('/api/auth/register')
+        .send({ nombre: 'Ana', email: 'ana@tachit.test', contrasena: 'abcdefgh' });
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.mensaje, /mayúscula/);
+    assert.ok(Array.isArray(res.body.errores));
+    assert.doesNotMatch(res.text, /abcdefgh/); // nunca devuelve la contraseña enviada
+});
+
+test('crear tarea con fecha imposible devuelve 400', async () => {
+    const res = await request(app)
+        .post('/api/tareas')
+        .set('Authorization', `Bearer ${tokenValido()}`)
+        .send({ titulo: 'Tarea', fecha_limite: '2026-13-45' });
+    assert.strictEqual(res.status, 400);
+    assert.match(res.body.mensaje, /fecha/);
+});
+
+test('sin token se responde 401 ANTES de mirar los datos', async () => {
+    const res = await request(app).post('/api/tareas').send({ titulo: '' });
+    assert.strictEqual(res.status, 401);
+});
+
+test('si llega una lista en vez de un objeto, 400 con mensaje en español', async () => {
+    const res = await request(app).post('/api/auth/login').send([1, 2, 3]);
+    assert.strictEqual(res.status, 400);
+    assert.strictEqual(res.body.mensaje, 'Los datos enviados no tienen el formato correcto');
+});

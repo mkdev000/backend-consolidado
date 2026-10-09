@@ -87,6 +87,23 @@ test('registro, login y tareas de principio a fin', opciones, async (t) => {
         assert.strictEqual(editada.status, 200);
     });
 
+    await t.test('completar enviando la tarea entera, como hace el frontend actual', async () => {
+        const lista = await request(app).get('/api/tareas').set('Authorization', `Bearer ${tokenAna}`);
+        const tarea = lista.body.find((t) => t.id === idTarea);
+        // El frontend manda TODOS los campos que recibió (id, user_id, uuid...) más el estado nuevo
+        const res = await request(app)
+            .put(`/api/tareas/${idTarea}`)
+            .set('Authorization', `Bearer ${tokenAna}`)
+            .send({ ...tarea, user_id: 999999, estado: 'completada' });
+        assert.strictEqual(res.status, 200);
+
+        const despues = await request(app).get('/api/tareas').set('Authorization', `Bearer ${tokenAna}`);
+        const editada = despues.body.find((t) => t.id === idTarea);
+        assert.strictEqual(editada.estado, 'completada');
+        assert.strictEqual(editada.titulo, tarea.titulo);
+        assert.strictEqual(editada.user_id, tarea.user_id); // el user_id falso se ignora
+    });
+
     await t.test('otro usuario NO puede ver, editar ni borrar mi tarea', async () => {
         const lista = await request(app).get('/api/tareas').set('Authorization', `Bearer ${tokenLuis}`);
         assert.ok(!lista.body.some((tarea) => tarea.id === idTarea));
