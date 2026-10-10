@@ -1,12 +1,22 @@
+const fs = require('node:fs');
+const path = require('node:path');
 const mysql = require('mysql2');
 require('dotenv').config();
+
+// Certificado de Aiven (CA). Es PÚBLICO: no es una clave secreta.
+// Sirve para comprobar que el servidor al otro lado es de verdad Aiven y no un impostor.
+// Se descarga en Aiven → tu servicio MySQL → "CA certificate".
+const RUTA_CERTIFICADO = path.join(__dirname, 'certs', 'aiven-ca.pem');
+const certificadoAiven = fs.readFileSync(RUTA_CERTIFICADO);
 
 const configBase = {
     host: process.env.DB_HOST,
     port: process.env.DB_PORT,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    ssl: { rejectUnauthorized: false },
+    // La conexión va cifrada Y se comprueba que el certificado del servidor lo firmó Aiven.
+    // (Antes era rejectUnauthorized: false, que cifraba pero NO comprobaba con quién hablábamos.)
+    ssl: { ca: certificadoAiven, rejectUnauthorized: true },
     dateStrings: true
 };
 
@@ -26,4 +36,4 @@ const poolTareas = mysql.createPool({
 const dbTareas = poolTareas.promise();
 
 // configBase también se exporta para el script de migraciones (scripts/migrar.js)
-module.exports = { poolRutlink, poolTareas, dbTareas, configBase };
+module.exports = { poolRutlink, poolTareas, dbTareas, configBase };
