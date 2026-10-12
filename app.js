@@ -7,6 +7,18 @@ const helmet = require('helmet');
 
 const app = express();
 
+// Cuántos intermediarios (proxies) hay entre el usuario y este servidor.
+// En tu ordenador no hay ninguno (0). En Render sí los hay: el número exacto lo mediremos
+// en la Fase 14 y lo pondremos en la variable PROXIES_DE_CONFIANZA de Render.
+// Hace falta para saber la IP real de cada usuario (la usan los límites de intentos).
+// OJO: un número demasiado alto dejaría que un atacante se inventara su IP.
+const proxies = Number.parseInt(process.env.PROXIES_DE_CONFIANZA ?? '0', 10);
+app.set('trust proxy', Number.isInteger(proxies) && proxies >= 0 && proxies <= 5 ? proxies : 0);
+// Render pone la variable RENDER en sus servidores: si estamos allí y falta el número, avisamos en los logs.
+if (process.env.RENDER && process.env.PROXIES_DE_CONFIANZA === undefined) {
+    console.warn('[aviso] Falta PROXIES_DE_CONFIANZA en Render: los límites de intentos no distinguirán a los usuarios.');
+}
+
 // Webs (orígenes) que pueden hablar con este backend desde el navegador.
 // Tienen que ser direcciones EXACTAS: nada de comodines, para que nadie pueda colarse
 // creando una web con un nombre parecido.

@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { dbTareas } = require('../../db');
 const validar = require('../middleware/validar');
 const { esquemaRegistro, esquemaLogin } = require('../validacion/esquemas');
+const { limiteLoginPorIp, limiteLoginPorEmail, limiteRegistro } = require('../middleware/limites');
 
 // Hash falso: si el email no existe, comparamos igualmente contra este hash.
 // Así el login tarda lo mismo exista o no el email, y nadie puede averiguar
@@ -17,8 +18,9 @@ function registrarError(donde, error) {
     console.error(`[auth/${donde}]`, error.code ?? '', error.message);
 }
 
+// limiteRegistro: máximo 10 registros por hora desde la misma conexión
 // validar(esquemaRegistro): nombre, email válido y contraseña segura (requisitos del prototipo)
-router.post('/register', validar(esquemaRegistro), async (req, res) => {
+router.post('/register', limiteRegistro, validar(esquemaRegistro), async (req, res) => {
     const { nombre, email, contrasena } = req.datos;
 
     try {
@@ -39,8 +41,11 @@ router.post('/register', validar(esquemaRegistro), async (req, res) => {
     }
 });
 
+// Los límites van ANTES de validar: así también cuentan los intentos con datos mal formados.
+// limiteLoginPorIp: 5 fallos por minuto desde la misma conexión
+// limiteLoginPorEmail: 10 fallos cada 15 minutos contra la misma cuenta
 // validar(esquemaLogin): email y contraseña son textos de tamaño razonable
-router.post('/login', validar(esquemaLogin), async (req, res) => {
+router.post('/login', limiteLoginPorIp, limiteLoginPorEmail, validar(esquemaLogin), async (req, res) => {
     const { email, contrasena } = req.datos;
 
     try {
