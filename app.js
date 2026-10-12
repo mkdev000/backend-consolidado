@@ -3,10 +3,27 @@
 // Así la pueden usar tanto index.js (para arrancar) como las pruebas automáticas.
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 
 const app = express();
 
-app.use(cors());
+// Webs (orígenes) que pueden hablar con este backend desde el navegador.
+// Tienen que ser direcciones EXACTAS: nada de comodines, para que nadie pueda colarse
+// creando una web con un nombre parecido.
+const ORIGENES_PERMITIDOS = [
+    'https://kmtask.vercel.app',                        // Tachit (producción)
+    'https://kmtask-git-tachit-2-kevin-62c6.vercel.app', // Tachit (vista previa de la rama tachit-2)
+    'https://rutlink.vercel.app',                       // Rutlink
+    'http://localhost:5173',                            // Tachit en tu ordenador (npm run dev)
+];
+
+// helmet: añade cabeceras de seguridad a TODAS las respuestas
+// (y quita "X-Powered-By: Express", que da pistas de qué tecnología usamos).
+app.use(helmet());
+
+// CORS: el navegador solo deja leer las respuestas a las webs de la lista.
+app.use(cors({ origin: ORIGENES_PERMITIDOS }));
+
 app.use(express.json());
 
 app.get('/', (req, res) => {
