@@ -13,6 +13,7 @@ const assert = require('node:assert');
 const request = require('supertest');
 const app = require('../app');
 const { poolRutlink, poolTareas } = require('../db');
+const { limpiarUrl } = require('../rutlink/validarUrl');
 
 after(async () => {
     await poolRutlink.promise().end();
@@ -37,6 +38,35 @@ test('Rutlink: crear un enlace sin URL devuelve 400 (no se guarda nada)', async 
     const res = await request(app).post('/api/enlaces').send({});
     assert.strictEqual(res.status, 400);
     assert.deepStrictEqual(res.body, { error: 'Falta la URL original' });
+});
+
+test('Rutlink: enlaces que no son http:// ni https:// se rechazan con 400 (no se guarda nada)', async () => {
+    const malos = [
+        'javascript:alert(1)',
+        'data:text/html,<script>alert(1)</script>',
+        'file:///C:/Windows/system32',
+        'ftp://ejemplo.com/archivo',
+        'google.com',           // sin http:// delante
+        'hola que tal',
+        123,                    // no es texto
+        ['https://ejemplo.com'], // una lista, no un texto
+    ];
+    for (const urlOriginal of malos) {
+        const res = await request(app).post('/api/enlaces').send({ urlOriginal });
+        assert.strictEqual(res.status, 400, String(urlOriginal));
+        assert.deepStrictEqual(res.body, { error: 'La URL debe empezar por http:// o https://' });
+    }
+});
+
+test('Rutlink: limpiarUrl acepta http y https (también muy largas) y rechaza el resto', () => {
+    assert.strictEqual(limpiarUrl('https://ejemplo.com/ruta?a=1'), 'https://ejemplo.com/ruta?a=1');
+    assert.strictEqual(limpiarUrl('  http://ejemplo.com  '), 'http://ejemplo.com/');
+    assert.strictEqual(limpiarUrl('HTTPS://Ejemplo.com'), 'https://ejemplo.com/');
+    const larga = 'https://ejemplo.com/?q=' + 'a'.repeat(5000);
+    assert.strictEqual(limpiarUrl(larga), larga, 'sin límite de tamaño propio');
+    for (const malo of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', ' data:text/html,hola', 'mailto:a@b.com', 'https://', '', null, undefined, {}]) {
+        assert.strictEqual(limpiarUrl(malo), null, String(malo));
+    }
 });
 
 test('Rutlink: un JSON mal formado devuelve 400 sin detalles internos (no se guarda nada)', async () => {
