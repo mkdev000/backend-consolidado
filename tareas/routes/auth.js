@@ -4,8 +4,11 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { dbTareas } = require('../../db');
 const validar = require('../middleware/validar');
-const { esquemaRegistro, esquemaLogin } = require('../validacion/esquemas');
+const { esquemaRegistro, esquemaLogin, esquemaGoogle } = require('../validacion/esquemas');
 const { limiteLoginPorIp, limiteLoginPorEmail, limiteRegistro } = require('../middleware/limites');
+// Se usa como "google.obtenerDatosDeGoogle(...)" (y no desestructurado) para que las pruebas
+// puedan sustituir a Google por un doble de prueba sin conectarse a Internet.
+const google = require('../google');
 
 // Hash falso: si el email no existe, comparamos igualmente contra este hash.
 // Así el login tarda lo mismo exista o no el email, y nadie puede averiguar
@@ -16,6 +19,15 @@ const HASH_FALSO = bcrypt.hashSync('usuario-que-no-existe', 10);
 // (podría incluir el email o el hash de la contraseña).
 function registrarError(donde, error) {
     console.error(`[auth/${donde}]`, error.code ?? '', error.message);
+}
+
+// El "pase" (JWT) que recibe el frontend al entrar. Igual para contraseña y para Google.
+function crearToken(usuario) {
+    return jwt.sign(
+        { id: usuario.id, nombre: usuario.nombre },
+        process.env.JWT_SECRET,
+        { expiresIn: '2h', algorithm: 'HS256' }
+    );
 }
 
 // limiteRegistro: máximo 10 registros por hora desde la misma conexión
@@ -55,24 +67,116 @@ router.post('/login', limiteLoginPorIp, limiteLoginPorEmail, validar(esquemaLogi
         );
         const usuario = filas[0];
 
+        // Las cuentas creadas con Google no tienen contraseña (NULL). Con ellas también se compara
+        // contra el hash falso: tarda lo mismo y responde lo mismo, así nadie puede averiguar
+        // qué emails usan Google. (bcrypt.compare con NULL, además, daría un error 500.)
+        const tieneContrasena = Boolean(usuario?.contrasena);
         const contrasenaCorrecta = await bcrypt.compare(
             contrasena,
-            usuario ? usuario.contrasena : HASH_FALSO
+            tieneContrasena ? usuario.contrasena : HASH_FALSO
         );
 
-        if (!usuario || !contrasenaCorrecta) {
+        if (!tieneContrasena || !contrasenaCorrecta) {
             return res.status(401).json({ mensaje: 'Email o contraseña incorrectos' });
         }
 
-        const token = jwt.sign(
-            { id: usuario.id, nombre: usuario.nombre },
-            process.env.JWT_SECRET,
-            { expiresIn: '2h', algorithm: 'HS256' }
-        );
-
-        res.json({ mensaje: 'Login correcto', token, nombre: usuario.nombre });
+        res.json({ mensaje: 'Login correcto', token: crearToken(usuario), nombre: usuario.nombre });
     } catch (error) {
         registrarError('login', error);
+        res.status(500).json({ mensaje: 'Error interno del servidor' });
+    }
+});
+
+// ---------- Continuar con Google ----------
+
+// Nombre para una cuenta nueva: el de Google; si no hay, lo de antes de la @ del email.
+function nombreParaCuentaNueva(persona) {
+    const nombre = persona.nombre.trim() || persona.email.split('@')[0];
+    return nombre.slice(0, 100) || 'Usuario';
+}
+
+// Busca la cuenta de esta persona o la crea. Devuelve { usuario, nuevo, unida }.
+// Tres casos, en este orden:
+//  1. Ya entró antes con Google  → la encontramos por su google_sub.
+//  2. Tiene cuenta con contraseña y el MISMO email → unimos Google a esa cuenta (ver SEGURIDAD).
+//  3. No tiene cuenta → la creamos sin contraseña.
+async function buscarOCrearConGoogle(persona) {
+    // Hasta 2 vueltas: si dos peticiones llegan a la vez (doble clic), la segunda choca con la
+    // primera (email o google_sub repetido) y en la 2.ª vuelta ya encuentra la cuenta creada.
+    for (let vuelta = 1; ; vuelta++) {
+        try {
+            const [porSub] = await dbTareas.query('SELECT id, nombre FROM usuarios WHERE google_sub = ?', [persona.sub]);
+            if (porSub[0]) return { usuario: porSub[0], nuevo: false, unida: false };
+
+            const [porEmail] = await dbTareas.query('SELECT id, nombre, google_sub FROM usuarios WHERE email = ?', [persona.email]);
+            const existente = porEmail[0];
+
+            if (existente) {
+                if (existente.google_sub) {
+                    throw new google.ErrorGoogle(409, 'Este email ya está unido a otra cuenta de Google.');
+                }
+                if (!persona.emailDeFiar) {
+                    throw new google.ErrorGoogle(409, 'Ya tienes una cuenta de Tachit con este email. Entra con tu email y contraseña.');
+                }
+                // SEGURIDAD (robo de cuenta "por adelantado"): Tachit todavía no comprueba los emails al
+                // registrarse, así que alguien pudo crear una cuenta con TU email y una contraseña suya,
+                // esperando a que algún día entres con Google. Por eso, al unir Google, la contraseña
+                // se borra: a partir de ahora solo entra quien controla de verdad ese email.
+                // (Con "¿Olvidaste tu contraseña?", paso 9, podrás volver a ponerte una.)
+                // "AND google_sub IS NULL": si otra petición la unió justo ahora, no la pisamos.
+                const [resultado] = await dbTareas.query(
+                    'UPDATE usuarios SET google_sub = ?, contrasena = NULL WHERE id = ? AND google_sub IS NULL',
+                    [persona.sub, existente.id]
+                );
+                if (resultado.affectedRows === 1) {
+                    return { usuario: { id: existente.id, nombre: existente.nombre }, nuevo: false, unida: true };
+                }
+                throw Object.assign(new Error('La cuenta cambió mientras la uníamos'), { code: 'ER_DUP_ENTRY' });
+            }
+
+            const nombre = nombreParaCuentaNueva(persona);
+            const [resultado] = await dbTareas.query(
+                'INSERT INTO usuarios (nombre, email, contrasena, google_sub) VALUES (?, ?, NULL, ?)',
+                [nombre, persona.email, persona.sub]
+            );
+            return { usuario: { id: resultado.insertId, nombre }, nuevo: true, unida: false };
+        } catch (error) {
+            if (error.code === 'ER_DUP_ENTRY' && vuelta < 2) continue;
+            throw error;
+        }
+    }
+}
+
+// limiteLoginPorIp: los intentos fallidos con Google también cuentan (5 por minuto por conexión)
+// validar(esquemaGoogle): solo se acepta { codigo: "..." }
+router.post('/google', limiteLoginPorIp, validar(esquemaGoogle), async (req, res) => {
+    // Si faltan GOOGLE_CLIENT_ID o GOOGLE_CLIENT_SECRET en el servidor, el botón no puede funcionar
+    if (!google.estaConfigurado()) {
+        return res.status(503).json({ mensaje: 'El acceso con Google no está disponible ahora mismo.' });
+    }
+
+    try {
+        const persona = await google.obtenerDatosDeGoogle(req.datos.codigo);
+
+        if (persona.email.length > 150) {
+            return res.status(400).json({ mensaje: 'Ese email es demasiado largo para Tachit.' });
+        }
+
+        const { usuario, nuevo, unida } = await buscarOCrearConGoogle(persona);
+
+        res.status(nuevo ? 201 : 200).json({
+            mensaje: nuevo ? 'Cuenta creada con Google' : 'Login correcto',
+            token: crearToken(usuario),
+            nombre: usuario.nombre,
+            nuevo,
+            unida,
+        });
+    } catch (error) {
+        // Errores "esperados" (código caducado, email sin verificar...): mensaje claro, sin detalles internos
+        if (error instanceof google.ErrorGoogle) {
+            return res.status(error.estado).json({ mensaje: error.message });
+        }
+        registrarError('google', error);
         res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
 });

@@ -67,6 +67,16 @@ const esquemaLogin = z.object({
         .max(200, 'Email o contraseña incorrectos'),
 });
 
+// "Continuar con Google": solo llega el código de un solo uso que da la ventanita de Google.
+// (Los códigos de Google miden unos 70-100 caracteres; 1024 deja margen sin aceptar textos enormes.)
+const esquemaGoogle = z.object({
+    codigo: z
+        .string({ error: 'Falta el código de Google' })
+        .trim()
+        .min(1, 'Falta el código de Google')
+        .max(1024, 'El código de Google no es válido'),
+});
+
 // ---------- Tareas ----------
 
 const ESTADOS = ['pendiente', 'en_progreso', 'en_pausa', 'completada'];
@@ -240,6 +250,7 @@ const esquemaAjustes = z
 module.exports = {
     esquemaRegistro,
     esquemaLogin,
+    esquemaGoogle,
     esquemaTarea,
     esquemaTareaCrear,
     esquemaSubtareaCrear,
