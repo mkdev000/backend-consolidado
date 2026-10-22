@@ -4,11 +4,25 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const { dbTareas } = require('../../db');
 const validar = require('../middleware/validar');
-const { esquemaRegistro, esquemaLogin, esquemaGoogle } = require('../validacion/esquemas');
-const { limiteLoginPorIp, limiteLoginPorEmail, limiteRegistro } = require('../middleware/limites');
+const {
+    esquemaRegistro,
+    esquemaLogin,
+    esquemaGoogle,
+    esquemaOlvideContrasena,
+    esquemaRestablecerContrasena,
+} = require('../validacion/esquemas');
+const {
+    limiteLoginPorIp,
+    limiteLoginPorEmail,
+    limiteRegistro,
+    limiteRecuperacionPorIp,
+    limiteRecuperacionPorEmail,
+    limiteRestablecer,
+} = require('../middleware/limites');
 // Se usa como "google.obtenerDatosDeGoogle(...)" (y no desestructurado) para que las pruebas
 // puedan sustituir a Google por un doble de prueba sin conectarse a Internet.
 const google = require('../google');
+const recuperacion = require('../recuperacion');
 
 // Hash falso: si el email no existe, comparamos igualmente contra este hash.
 // Así el login tarda lo mismo exista o no el email, y nadie puede averiguar
@@ -112,6 +126,11 @@ async function buscarOCrearConGoogle(persona) {
             const existente = porEmail[0];
 
             if (existente) {
+                // Doble clic: la otra petición acaba de crear la cuenta con ESTA misma cuenta de Google
+                // entre nuestras dos búsquedas. No es un error: es la misma persona entrando.
+                if (existente.google_sub === persona.sub) {
+                    return { usuario: { id: existente.id, nombre: existente.nombre }, nuevo: false, unida: false };
+                }
                 if (existente.google_sub) {
                     throw new google.ErrorGoogle(409, 'Este email ya está unido a otra cuenta de Google.');
                 }
@@ -177,6 +196,38 @@ router.post('/google', limiteLoginPorIp, validar(esquemaGoogle), async (req, res
             return res.status(error.estado).json({ mensaje: error.message });
         }
         registrarError('google', error);
+        res.status(500).json({ mensaje: 'Error interno del servidor' });
+    }
+});
+
+// ---------- ¿Olvidaste tu contraseña? ----------
+
+// La MISMA respuesta exista o no la cuenta: así nadie puede averiguar qué emails están registrados
+const RESPUESTA_ENLACE_PEDIDO =
+    'Si ese email tiene una cuenta en Tachit, te hemos enviado un enlace para elegir una contraseña nueva. Caduca en 30 minutos.';
+
+// 1) Pedir el enlace por email
+router.post('/olvide-contrasena', limiteRecuperacionPorIp, limiteRecuperacionPorEmail, validar(esquemaOlvideContrasena), (req, res) => {
+    // Si faltan RESEND_API_KEY, EMAIL_REMITENTE o FRONTEND_URL, no podemos mandar el email
+    if (!recuperacion.estaConfigurado()) {
+        return res.status(503).json({ mensaje: 'Recuperar la contraseña no está disponible ahora mismo. Inténtalo más tarde.' });
+    }
+    // Respondemos YA y el trabajo (buscar la cuenta, crear el enlace, mandar el email) se hace después.
+    // Así la respuesta tarda lo mismo exista o no la cuenta (nadie lo puede deducir midiendo el tiempo).
+    recuperacion.pedirEnlaceEnSegundoPlano(req.datos.email);
+    res.json({ mensaje: RESPUESTA_ENLACE_PEDIDO });
+});
+
+// 2) Usar el enlace: poner la contraseña nueva
+router.post('/restablecer-contrasena', limiteRestablecer, validar(esquemaRestablecerContrasena), async (req, res) => {
+    try {
+        const cambiada = await recuperacion.restablecer(req.datos.token, req.datos.contrasena);
+        if (!cambiada) {
+            return res.status(400).json({ mensaje: 'El enlace no es válido o ha caducado. Pide uno nuevo.' });
+        }
+        res.json({ mensaje: 'Contraseña cambiada. Ya puedes entrar con tu contraseña nueva.' });
+    } catch (error) {
+        registrarError('restablecer', error);
         res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
 });

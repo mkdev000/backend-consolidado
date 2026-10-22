@@ -67,6 +67,25 @@ const esquemaLogin = z.object({
         .max(200, 'Email o contraseña incorrectos'),
 });
 
+// El email, limpio igual que en el registro (sin espacios y en minúsculas)
+const emailLimpio = z
+    .string({ error: 'El email es obligatorio' })
+    .trim()
+    .toLowerCase()
+    .pipe(z.email('El email no es válido').max(150, 'El email puede tener como máximo 150 caracteres'));
+
+// "¿Olvidaste tu contraseña?" (paso 9): 1) pedir el enlace con el email
+const esquemaOlvideContrasena = z.object({ email: emailLimpio });
+
+// 2) usar el enlace: el código del enlace (letras, números, - y _) y la contraseña nueva,
+//    con los MISMOS requisitos que al registrarse
+const esquemaRestablecerContrasena = z.object({
+    token: z
+        .string({ error: 'El enlace no es válido o ha caducado. Pide uno nuevo.' })
+        .regex(/^[A-Za-z0-9_-]{20,100}$/, 'El enlace no es válido o ha caducado. Pide uno nuevo.'),
+    contrasena: contrasenaSegura,
+});
+
 // "Continuar con Google": solo llega el código de un solo uso que da la ventanita de Google.
 // (Los códigos de Google miden unos 70-100 caracteres; 1024 deja margen sin aceptar textos enormes.)
 const esquemaGoogle = z.object({
@@ -251,6 +270,8 @@ module.exports = {
     esquemaRegistro,
     esquemaLogin,
     esquemaGoogle,
+    esquemaOlvideContrasena,
+    esquemaRestablecerContrasena,
     esquemaTarea,
     esquemaTareaCrear,
     esquemaSubtareaCrear,

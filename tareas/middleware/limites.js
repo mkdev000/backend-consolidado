@@ -6,7 +6,7 @@ const { rateLimit } = require('express-rate-limit');
 
 const MINUTO = 60 * 1000;
 
-// Opciones comunes de los tres límites
+// Opciones comunes de todos los límites
 const comunes = {
     standardHeaders: 'draft-8', // cabecera RateLimit estándar: le dice al cliente cuánto le queda
     legacyHeaders: false,       // sin las cabeceras antiguas X-RateLimit-*
@@ -48,4 +48,43 @@ const limiteRegistro = rateLimit({
     message: { mensaje: 'Demasiados registros desde esta conexión. Inténtalo más tarde.' },
 });
 
-module.exports = { limiteLoginPorIp, limiteLoginPorEmail, limiteRegistro };
+// 4) "¿Olvidaste tu contraseña?" por conexión (IP): 5 peticiones cada 15 minutos.
+//    Aquí cuentan TODAS (la respuesta siempre es la misma), para que nadie use Tachit para llenar
+//    de emails la bandeja de otra persona ni gaste los envíos gratis de Resend.
+const limiteRecuperacionPorIp = rateLimit({
+    ...comunes,
+    windowMs: 15 * MINUTO,
+    limit: 5,
+    message: { mensaje: 'Demasiadas peticiones para recuperar la contraseña. Espera 15 minutos y vuelve a probar.' },
+});
+
+// 5) "¿Olvidaste tu contraseña?" por email: 3 enlaces por hora a la misma dirección,
+//    aunque el atacante vaya cambiando de conexión.
+const limiteRecuperacionPorEmail = rateLimit({
+    ...comunes,
+    windowMs: 60 * MINUTO,
+    limit: 3,
+    keyGenerator: (req) => {
+        const email = req.body?.email;
+        return typeof email === 'string' ? `recuperar:${email.trim().toLowerCase().slice(0, 254)}` : 'recuperar:(ninguno)';
+    },
+    message: { mensaje: 'Ya hemos enviado varios enlaces a este email. Revisa tu bandeja (y el spam) o espera una hora.' },
+});
+
+// 6) Usar el enlace (poner contraseña nueva): 10 intentos FALLIDOS cada 15 minutos por conexión.
+const limiteRestablecer = rateLimit({
+    ...comunes,
+    windowMs: 15 * MINUTO,
+    limit: 10,
+    skipSuccessfulRequests: true,
+    message: { mensaje: 'Demasiados intentos. Espera 15 minutos y vuelve a probar.' },
+});
+
+module.exports = {
+    limiteLoginPorIp,
+    limiteLoginPorEmail,
+    limiteRegistro,
+    limiteRecuperacionPorIp,
+    limiteRecuperacionPorEmail,
+    limiteRestablecer,
+};
