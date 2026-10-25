@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
 const bcrypt = require('bcrypt');
-const jwt = require('jsonwebtoken');
 const { dbTareas } = require('../../db');
 const validar = require('../middleware/validar');
 const {
@@ -18,11 +17,13 @@ const {
     limiteRecuperacionPorIp,
     limiteRecuperacionPorEmail,
     limiteRestablecer,
+    limiteRenovar,
 } = require('../middleware/limites');
 // Se usa como "google.obtenerDatosDeGoogle(...)" (y no desestructurado) para que las pruebas
 // puedan sustituir a Google por un doble de prueba sin conectarse a Internet.
 const google = require('../google');
 const recuperacion = require('../recuperacion');
+const sesiones = require('../sesiones');
 
 // Hash falso: si el email no existe, comparamos igualmente contra este hash.
 // Así el login tarda lo mismo exista o no el email, y nadie puede averiguar
@@ -35,14 +36,6 @@ function registrarError(donde, error) {
     console.error(`[auth/${donde}]`, error.code ?? '', error.message);
 }
 
-// El "pase" (JWT) que recibe el frontend al entrar. Igual para contraseña y para Google.
-function crearToken(usuario) {
-    return jwt.sign(
-        { id: usuario.id, nombre: usuario.nombre },
-        process.env.JWT_SECRET,
-        { expiresIn: '2h', algorithm: 'HS256' }
-    );
-}
 
 // limiteRegistro: máximo 10 registros por hora desde la misma conexión
 // validar(esquemaRegistro): nombre, email válido y contraseña segura (requisitos del prototipo)
@@ -94,7 +87,9 @@ router.post('/login', limiteLoginPorIp, limiteLoginPorEmail, validar(esquemaLogi
             return res.status(401).json({ mensaje: 'Email o contraseña incorrectos' });
         }
 
-        res.json({ mensaje: 'Login correcto', token: crearToken(usuario), nombre: usuario.nombre });
+        // Dos pases: el corto (15 min) va en la respuesta y el de renovación (30 días), en la cookie
+        const token = await sesiones.iniciarSesion(res, usuario);
+        res.json({ mensaje: 'Login correcto', token, nombre: usuario.nombre });
     } catch (error) {
         registrarError('login', error);
         res.status(500).json({ mensaje: 'Error interno del servidor' });
@@ -182,10 +177,11 @@ router.post('/google', limiteLoginPorIp, validar(esquemaGoogle), async (req, res
         }
 
         const { usuario, nuevo, unida } = await buscarOCrearConGoogle(persona);
+        const token = await sesiones.iniciarSesion(res, usuario);
 
         res.status(nuevo ? 201 : 200).json({
             mensaje: nuevo ? 'Cuenta creada con Google' : 'Login correcto',
-            token: crearToken(usuario),
+            token,
             nombre: usuario.nombre,
             nuevo,
             unida,
@@ -198,6 +194,42 @@ router.post('/google', limiteLoginPorIp, validar(esquemaGoogle), async (req, res
         registrarError('google', error);
         res.status(500).json({ mensaje: 'Error interno del servidor' });
     }
+});
+
+// ---------- Renovar la sesión y cerrarla ----------
+
+// Pedir un pase corto nuevo con el pase de renovación de la cookie (la app lo hace sola, sin que lo notes).
+// Cada vez, el pase de renovación se cambia por uno nuevo (rotación).
+router.post('/renovar', limiteRenovar, async (req, res) => {
+    const codigo = sesiones.leerCookie(req);
+    if (!codigo) {
+        return res.status(401).json({ mensaje: 'Tu sesión ha caducado. Vuelve a entrar.' });
+    }
+    try {
+        const resultado = await sesiones.renovar(codigo);
+        if (!resultado) {
+            sesiones.borrarCookie(res);
+            return res.status(401).json({ mensaje: 'Tu sesión ha caducado. Vuelve a entrar.' });
+        }
+        sesiones.ponerCookie(res, resultado.codigo);
+        res.json({ mensaje: 'Sesión renovada', token: sesiones.crearPaseCorto(resultado.usuario), nombre: resultado.usuario.nombre });
+    } catch (error) {
+        registrarError('renovar', error);
+        res.status(500).json({ mensaje: 'Error interno del servidor' });
+    }
+});
+
+// Cerrar sesión DE VERDAD: el pase de renovación de este dispositivo queda anulado en el servidor.
+// Responde 200 siempre (aunque no hubiera sesión): el resultado para el usuario es el mismo.
+router.post('/cerrar-sesion', async (req, res) => {
+    const codigo = sesiones.leerCookie(req);
+    try {
+        if (codigo) await sesiones.cerrarSesion(codigo);
+    } catch (error) {
+        registrarError('cerrar-sesion', error);
+    }
+    sesiones.borrarCookie(res);
+    res.json({ mensaje: 'Sesión cerrada' });
 });
 
 // ---------- ¿Olvidaste tu contraseña? ----------

@@ -13,6 +13,7 @@ const { dbTareas } = require('../db');
 const { enTransaccion, registrarError } = require('./utilidades');
 // Se usa como "email.enviarEmail(...)" para que las pruebas puedan sustituirlo por un doble
 const email = require('./email');
+const { cerrarTodas } = require('./sesiones');
 
 const MINUTOS_VALIDEZ = 30;
 
@@ -75,6 +76,8 @@ async function pedirEnlace(direccionEmail) {
     const codigo = crypto.randomBytes(32).toString('base64url');
 
     await enTransaccion(dbTareas, async (conexion) => {
+        // "Candado" sobre la fila de la persona: si pide dos enlaces a la vez, se hacen uno detrás de otro
+        await conexion.query('SELECT id FROM usuarios WHERE id = ? FOR UPDATE', [usuario.id]);
         // Limpieza: anulamos los enlaces anteriores de esta persona (solo vale el último)
         // y borramos los viejos para que la tabla no crezca sin fin.
         await conexion.query(
@@ -136,6 +139,8 @@ async function restablecer(codigo, contrasenaNueva) {
             'UPDATE restablecimientos_contrasena SET usado_en = NOW() WHERE user_id = ? AND usado_en IS NULL',
             [enlace.user_id]
         );
+        // Y se cierran TODAS sus sesiones abiertas: si alguien se había colado en la cuenta, queda fuera
+        await cerrarTodas(conexion, enlace.user_id);
         return true;
     });
 }

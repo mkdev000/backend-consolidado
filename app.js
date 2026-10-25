@@ -34,7 +34,8 @@ const ORIGENES_PERMITIDOS = [
 app.use(helmet());
 
 // CORS: el navegador solo deja leer las respuestas a las webs de la lista.
-app.use(cors({ origin: ORIGENES_PERMITIDOS }));
+// credentials: true → esas webs (y solo esas) pueden enviar y recibir la cookie del pase de renovación.
+app.use(cors({ origin: ORIGENES_PERMITIDOS, credentials: true }));
 
 app.use(express.json());
 

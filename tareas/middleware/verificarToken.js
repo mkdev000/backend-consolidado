@@ -16,6 +16,12 @@ function verificarToken(req, res, next) {
 
     // algorithms: solo aceptamos tokens firmados con HS256 (el que usamos al crearlos)
     jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] }, (err, decoded) => {
+        // Pase CADUCADO (es normal: dura 15 minutos) → 401 con un código, para que la app sepa
+        // que tiene que pedir uno nuevo con /api/auth/renovar y repetir la petición.
+        if (err && err.name === 'TokenExpiredError') {
+            return res.status(401).json({ mensaje: 'Token caducado', codigo: 'TOKEN_CADUCADO' });
+        }
+        // Pase falso o manipulado → 403
         if (err) {
             return res.status(403).json({ mensaje: 'Token inválido o caducado' });
         }

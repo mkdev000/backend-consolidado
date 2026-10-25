@@ -80,6 +80,15 @@ const limiteRestablecer = rateLimit({
     message: { mensaje: 'Demasiados intentos. Espera 15 minutos y vuelve a probar.' },
 });
 
+// 7) Renovar la sesión: 60 peticiones cada 15 minutos por conexión. Un uso normal pide 1 cada 15 minutos
+//    por pestaña (más una al abrir la app), así que nadie normal llega; un atacante probando pases, sí.
+const limiteRenovar = rateLimit({
+    ...comunes,
+    windowMs: 15 * MINUTO,
+    limit: 60,
+    message: { mensaje: 'Demasiadas peticiones. Espera unos minutos y vuelve a probar.' },
+});
+
 module.exports = {
     limiteLoginPorIp,
     limiteLoginPorEmail,
@@ -87,4 +96,5 @@ module.exports = {
     limiteRecuperacionPorIp,
     limiteRecuperacionPorEmail,
     limiteRestablecer,
+    limiteRenovar,
 };
