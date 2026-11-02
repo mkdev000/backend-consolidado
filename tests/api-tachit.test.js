@@ -106,6 +106,10 @@ test('rutas nuevas de Tachit de principio a fin', opciones, async (t) => {
         assert.strictEqual(tarea.duracion_min, 15);
         assert.strictEqual(tarea.icono, 'hogar');
         assert.deepStrictEqual(tarea.dias_semana, [1, 3]);
+        // "proyecto" ya no existe (migración 016): se envía, pero se ignora y no vuelve
+        assert.strictEqual('proyecto' in tarea, false);
+        // y "urgente" ya no es una prioridad válida
+        assert.strictEqual((await yo.put(`/api/tareas/${idTarea}`, { titulo: 'X', prioridad: 'urgente' })).status, 400);
     });
 
     await t.test('completar y desmarcar quedan en el historial', async () => {
