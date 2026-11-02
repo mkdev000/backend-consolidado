@@ -99,9 +99,8 @@ const esquemaGoogle = z.object({
 // ---------- Tareas ----------
 
 const ESTADOS = ['pendiente', 'en_progreso', 'en_pausa', 'completada'];
-// 'urgente' no está en el prototipo, pero el frontend actual lo ofrece.
-// Se quitará cuando se rehaga la pantalla de crear tarea (Fase 6).
-const PRIORIDADES = ['baja', 'media', 'alta', 'urgente'];
+// Las tres del prototipo (anillo de tres tramos). 'urgente' se quitó en la Fase 6 (migración 016).
+const PRIORIDADES = ['baja', 'media', 'alta'];
 
 // Iconos de tarea del prototipo (TICON_KEYS), avisos posibles (RSTEPS) y repeticiones.
 const ICONOS = ['tarta', 'regalo', 'medico', 'viaje', 'estudio', 'deporte', 'compras', 'hogar', 'trabajo', 'llamada'];
@@ -153,6 +152,7 @@ function comprobarRepeticion(datos, ctx) {
 }
 
 // Los campos que no aparecen aquí (id, user_id, veces_aplazada...) se IGNORAN: nunca llegan a la base de datos.
+// "proyecto" ya no existe (ahora son categorías): si alguien lo envía, también se ignora.
 const esquemaTareaBase = z.object({
     titulo: z
         .string({ error: 'El título es obligatorio' })
@@ -168,7 +168,6 @@ const esquemaTareaBase = z.object({
         .enum(PRIORIDADES, { error: 'La prioridad no es válida' })
         .nullish()
         .transform((valor) => valor ?? 'media'),
-    proyecto: textoOpcional(100, 'El proyecto'),
     fecha_limite: opcionalConFormato(z.iso.date, 'La fecha no es válida (formato AAAA-MM-DD)'),
     hora_limite: opcionalConFormato(z.iso.time, 'La hora no es válida (formato HH:MM)'),
     ...camposNuevosTarea,

@@ -10,7 +10,7 @@ const { leerId, registrarError, enTransaccion } = require('../utilidades');
 router.use(verificarToken);
 
 // Columnas que el cliente puede enviar (las de siempre + las nuevas de Tachit)
-const CAMPOS_BASICOS = ['titulo', 'descripcion', 'estado', 'prioridad', 'proyecto', 'fecha_limite', 'hora_limite'];
+const CAMPOS_BASICOS = ['titulo', 'descripcion', 'estado', 'prioridad', 'fecha_limite', 'hora_limite'];
 const CAMPOS_NUEVOS = ['duracion_min', 'aviso_min', 'repeticion', 'dias_semana', 'icono', 'minutos_reales'];
 
 // La base de datos guarda los días como texto "1,3"; la API los da como lista [1, 3]

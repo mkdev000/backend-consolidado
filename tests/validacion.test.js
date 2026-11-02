@@ -52,7 +52,6 @@ test('tarea: valores por defecto y limpieza', () => {
         descripcion: null,
         estado: 'pendiente',
         prioridad: 'media',
-        proyecto: null,
         fecha_limite: null,
         hora_limite: null,
     });
@@ -76,6 +75,7 @@ test('tarea: fechas, horas, estados y prioridades imposibles se rechazan', () =>
     assert.match(primerError(esquemaTarea, { titulo: 'T', hora_limite: '25:00' }), /hora no es válida/);
     assert.match(primerError(esquemaTarea, { titulo: 'T', estado: 'borrada' }), /estado no es válido/);
     assert.match(primerError(esquemaTarea, { titulo: 'T', prioridad: 'altísima' }), /prioridad no es válida/);
+    assert.match(primerError(esquemaTarea, { titulo: 'T', prioridad: 'urgente' }), /prioridad no es válida/);
     assert.match(primerError(esquemaTarea, { titulo: 'x'.repeat(151) }), /150 caracteres/);
     assert.match(primerError(esquemaTarea, { titulo: '   ' }), /obligatorio/);
 });
