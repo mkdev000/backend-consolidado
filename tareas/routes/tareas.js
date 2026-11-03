@@ -3,8 +3,9 @@ const router = express.Router();
 const { dbTareas } = require('../../db');
 const verificarToken = require('../middleware/verificarToken');
 const validar = require('../middleware/validar');
-const { esquemaTarea, esquemaTareaCrear, esquemaCategoriasDeTarea } = require('../validacion/esquemas');
+const { esquemaTarea, esquemaTareaCrear, esquemaEstadoTarea, esquemaCategoriasDeTarea } = require('../validacion/esquemas');
 const { leerId, registrarError, enTransaccion } = require('../utilidades');
+const { siguienteFecha } = require('../repeticion');
 
 // Todas las rutas de este archivo necesitan sesión
 router.use(verificarToken);
@@ -183,6 +184,79 @@ router.put('/:id', validar(esquemaTarea), async (req, res) => {
     } catch (error) {
         registrarError('tareas/editar', error);
         res.status(500).json({ mensaje: 'Error al actualizar la tarea' });
+    }
+});
+
+// ---------- Completar (o volver a dejar pendiente) una tarea MÍA ----------
+// PATCH = cambiar SOLO una parte. Aquí solo llega { estado }, así que es imposible pisar
+// sin querer el título, la hora o la descripción (con el PUT había que enviar la tarea entera).
+// Si la tarea se repite, en la MISMA transacción se crea la siguiente vez: o se guarda todo o nada.
+router.patch('/:id/estado', validar(esquemaEstadoTarea), async (req, res) => {
+    const userId = req.usuario.id;
+    const tareaId = leerId(req.params.id);
+    if (tareaId === null) {
+        return res.status(400).json({ mensaje: 'Identificador de tarea no válido' });
+    }
+    const { estado, hoy } = req.datos;
+
+    try {
+        const resultado = await enTransaccion(dbTareas, async (conexion) => {
+            // FOR UPDATE: si llegan dos clics a la vez, el segundo espera a que termine el primero
+            const [[tarea]] = await conexion.query(
+                'SELECT * FROM tareas WHERE id = ? AND user_id = ? FOR UPDATE',
+                [tareaId, userId]
+            );
+            if (!tarea) return null;
+
+            // Ya estaba así (doble clic, o dos pestañas abiertas): no se cambia nada ni se duplica nada
+            if (tarea.estado === estado) return { siguiente: null };
+
+            const creaSiguiente = estado === 'completada' && tarea.repeticion !== null;
+            // La que completas deja de repetirse: la repetición "pasa" a la tarea nueva
+            await conexion.query(
+                creaSiguiente
+                    ? 'UPDATE tareas SET estado = ?, repeticion = NULL, dias_semana = NULL WHERE id = ? AND user_id = ?'
+                    : 'UPDATE tareas SET estado = ? WHERE id = ? AND user_id = ?',
+                [estado, tareaId, userId]
+            );
+            await registrarEvento(conexion, { userId, tareaId, tipo: estado === 'completada' ? 'completada' : 'reabierta' });
+            if (!creaSiguiente) return { siguiente: null };
+
+            // La siguiente vez: mismos datos, otro día, pendiente
+            const desde = tarea.fecha_limite ?? hoy ?? new Date().toISOString().slice(0, 10);
+            const fecha = siguienteFecha(desde, tarea.repeticion, textoADias(tarea.dias_semana));
+            const [insercion] = await conexion.query(
+                `INSERT INTO tareas (user_id, titulo, descripcion, estado, prioridad, fecha_limite, hora_limite,
+                                     duracion_min, aviso_min, repeticion, dias_semana, icono)
+                 VALUES (?, ?, ?, 'pendiente', ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [userId, tarea.titulo, tarea.descripcion, tarea.prioridad, fecha, tarea.hora_limite,
+                    tarea.duracion_min, tarea.aviso_min, tarea.repeticion, tarea.dias_semana, tarea.icono]
+            );
+            const nuevaId = insercion.insertId;
+            await registrarEvento(conexion, { userId, tareaId: nuevaId, tipo: 'creada' });
+            // Sus categorías (copiadas de la tabla de unión, que solo tiene las MÍAS)
+            await conexion.query(
+                `INSERT INTO tarea_categorias (tarea_id, categoria_id, user_id)
+                 SELECT ?, categoria_id, user_id FROM tarea_categorias WHERE tarea_id = ? AND user_id = ?`,
+                [nuevaId, tareaId, userId]
+            );
+            // Sus subtareas, otra vez sin marcar y en el mismo orden
+            await conexion.query(
+                'INSERT INTO subtareas (tarea_id, titulo, orden) SELECT ?, titulo, orden FROM subtareas WHERE tarea_id = ? ORDER BY orden, id',
+                [nuevaId, tareaId]
+            );
+            return { siguiente: { id: nuevaId, fecha_limite: fecha } };
+        });
+
+        if (!resultado) return res.status(404).json({ mensaje: 'Tarea no encontrada' });
+        res.json({
+            mensaje: estado === 'completada' ? 'Tarea completada' : 'Tarea pendiente otra vez',
+            estado,
+            siguiente: resultado.siguiente,
+        });
+    } catch (error) {
+        registrarError('tareas/estado', error);
+        res.status(500).json({ mensaje: 'Error al cambiar el estado de la tarea' });
     }
 });
 

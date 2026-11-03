@@ -181,6 +181,14 @@ const esquemaTareaCrear = esquemaTareaBase
     .extend({ uuid: z.uuid('El identificador (uuid) no es válido').optional() })
     .superRefine(comprobarRepeticion);
 
+// Completar o volver a dejar pendiente (PATCH /api/tareas/:id/estado, paso 6.5): SOLO el estado.
+// "hoy" es el día de hoy en la hora del usuario; solo se usa si una tarea que se repite no tiene fecha
+// (el servidor está en UTC y, entre las 00:00 y las 01:00 de España, su "hoy" sería todavía ayer).
+const esquemaEstadoTarea = z.object({
+    estado: z.enum(['pendiente', 'completada'], { error: 'El estado tiene que ser pendiente o completada' }),
+    hoy: opcionalConFormato(z.iso.date, 'La fecha de hoy no es válida (formato AAAA-MM-DD)'),
+});
+
 // ---------- Subtareas ----------
 
 const tituloSubtarea = z
@@ -273,6 +281,7 @@ module.exports = {
     esquemaRestablecerContrasena,
     esquemaTarea,
     esquemaTareaCrear,
+    esquemaEstadoTarea,
     esquemaSubtareaCrear,
     esquemaSubtareaCambiar,
     esquemaCategoriaCrear,

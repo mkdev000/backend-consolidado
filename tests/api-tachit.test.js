@@ -221,6 +221,82 @@ test('rutas nuevas de Tachit de principio a fin', opciones, async (t) => {
         assert.strictEqual((await yo.patch('/api/ajustes', { copia_drive_activa: true })).status, 409);
     });
 
+    await t.test('completar con PATCH: solo cambia el estado, sin pisar nada más', async () => {
+        const id = (await yo.post('/api/tareas', {
+            titulo: 'Pagar el recibo de la luz', descripcion: 'Con la tarjeta', fecha_limite: '2026-11-03', hora_limite: '10:00',
+        })).body.id;
+        const hecha = await yo.patch(`/api/tareas/${id}/estado`, { estado: 'completada' });
+        assert.strictEqual(hecha.status, 200);
+        assert.strictEqual(hecha.body.siguiente, null);
+        const tarea = await buscarTarea(yo, id);
+        assert.strictEqual(tarea.estado, 'completada');
+        assert.strictEqual(tarea.descripcion, 'Con la tarjeta');
+        assert.strictEqual(tarea.hora_limite, '10:00:00');
+
+        // Doble clic: la segunda vez no hace nada (un solo "completada" en el historial)
+        assert.strictEqual((await yo.patch(`/api/tareas/${id}/estado`, { estado: 'completada' })).status, 200);
+        const [[{ veces }]] = await dbTareas.query(
+            "SELECT COUNT(*) AS veces FROM tarea_eventos WHERE tarea_id = ? AND tipo = 'completada'", [id]
+        );
+        assert.strictEqual(veces, 1);
+
+        assert.strictEqual((await yo.patch(`/api/tareas/${id}/estado`, { estado: 'pendiente' })).status, 200);
+        assert.strictEqual((await buscarTarea(yo, id)).estado, 'pendiente');
+
+        // Datos imposibles, ids raros y tareas de otro usuario
+        assert.strictEqual((await yo.patch(`/api/tareas/${id}/estado`, { estado: 'borrada' })).status, 400);
+        assert.strictEqual((await yo.patch(`/api/tareas/${id}/estado`, {})).status, 400);
+        assert.strictEqual((await yo.patch(`/api/tareas/${id}/estado`, { estado: 'completada', hoy: '2026-02-30' })).status, 400);
+        assert.strictEqual((await yo.patch('/api/tareas/abc/estado', { estado: 'completada' })).status, 400);
+        assert.strictEqual((await yo.patch('/api/tareas/2147483647/estado', { estado: 'completada' })).status, 404);
+        assert.strictEqual((await otro.patch(`/api/tareas/${id}/estado`, { estado: 'completada' })).status, 404);
+        assert.strictEqual((await buscarTarea(yo, id)).estado, 'pendiente');
+    });
+
+    await t.test('completar una tarea que se repite crea la siguiente, con sus categorías y subtareas sin marcar', async () => {
+        const id = (await yo.post('/api/tareas', {
+            titulo: 'Ir al gimnasio', fecha_limite: '2026-11-03', hora_limite: '19:00', prioridad: 'alta',
+            repeticion: 'semanal', dias_semana: [1, 4], icono: 'deporte',
+        })).body.id;
+        const salud = (await yo.post('/api/categorias', { nombre: 'Salud' })).body.categoria;
+        await yo.put(`/api/tareas/${id}/categorias`, { ids: [salud.id] });
+        const toalla = (await yo.post('/api/subtareas', { tarea_id: id, titulo: 'Llevar la toalla' })).body.subtarea;
+        await yo.post('/api/subtareas', { tarea_id: id, titulo: 'Estirar' });
+        await yo.patch(`/api/subtareas/${toalla.id}`, { hecha: true });
+
+        const res = await yo.patch(`/api/tareas/${id}/estado`, { estado: 'completada' });
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.siguiente.fecha_limite, '2026-11-05'); // martes → jueves
+
+        // La completada deja de repetirse...
+        const vieja = await buscarTarea(yo, id);
+        assert.strictEqual(vieja.estado, 'completada');
+        assert.strictEqual(vieja.repeticion, null);
+        assert.strictEqual(vieja.dias_semana, null);
+        // ...y la siguiente lo lleva todo, pendiente y con las subtareas sin marcar
+        const siguiente = await buscarTarea(yo, res.body.siguiente.id);
+        assert.strictEqual(siguiente.estado, 'pendiente');
+        assert.strictEqual(siguiente.fecha_limite, '2026-11-05');
+        assert.strictEqual(siguiente.hora_limite, '19:00:00');
+        assert.strictEqual(siguiente.prioridad, 'alta');
+        assert.strictEqual(siguiente.repeticion, 'semanal');
+        assert.deepStrictEqual(siguiente.dias_semana, [1, 4]);
+        assert.strictEqual(siguiente.icono, 'deporte');
+        assert.deepStrictEqual(siguiente.categorias.map((c) => c.nombre), ['Salud']);
+        assert.deepStrictEqual(siguiente.subtareas.map((s) => [s.titulo, s.hecha]), [['Llevar la toalla', false], ['Estirar', false]]);
+
+        // Doble clic: NO se crea otra más
+        const otraVez = await yo.patch(`/api/tareas/${id}/estado`, { estado: 'completada' });
+        assert.strictEqual(otraVez.body.siguiente, null);
+        const todas = (await yo.get('/api/tareas')).body.filter((t) => t.titulo === 'Ir al gimnasio');
+        assert.strictEqual(todas.length, 2);
+
+        // Sin fecha: se cuenta desde el "hoy" que envía el usuario
+        const sinFecha = (await yo.post('/api/tareas', { titulo: 'Regar las plantas', repeticion: 'diaria' })).body.id;
+        const regada = await yo.patch(`/api/tareas/${sinFecha}/estado`, { estado: 'completada', hoy: '2026-11-03' });
+        assert.strictEqual(regada.body.siguiente.fecha_limite, '2026-11-04');
+    });
+
     await t.test('borrar la tarea deja constancia en el historial', async () => {
         assert.strictEqual((await otro.delete(`/api/tareas/${idTarea}`)).status, 404);
         assert.strictEqual((await yo.delete(`/api/tareas/${idTarea}`)).status, 200);
@@ -233,6 +309,7 @@ test('rutas nuevas de Tachit de principio a fin', opciones, async (t) => {
 test('rutas nuevas sin token devuelven 401', async () => {
     for (const [metodo, url] of [
         ['get', '/api/categorias'], ['post', '/api/subtareas'], ['get', '/api/ajustes'], ['put', '/api/tareas/1/categorias'],
+        ['patch', '/api/tareas/1/estado'],
     ]) {
         assert.strictEqual((await request(app)[metodo](url)).status, 401, `${metodo} ${url}`);
     }
