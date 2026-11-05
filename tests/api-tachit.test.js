@@ -297,6 +297,53 @@ test('rutas nuevas de Tachit de principio a fin', opciones, async (t) => {
         assert.strictEqual(regada.body.siguiente.fecha_limite, '2026-11-04');
     });
 
+    await t.test('horario: mover varias tareas a la vez (todo o nada)', async () => {
+        const a = (await yo.post('/api/tareas', { titulo: 'Comprar pan', fecha_limite: '2026-11-05' })).body.id;
+        const b = (await yo.post('/api/tareas', { titulo: 'Llamar al fontanero', fecha_limite: '2026-11-05', hora_limite: '09:00' })).body.id;
+        const ajena = (await otro.post('/api/tareas', { titulo: 'Tarea de Leo', fecha_limite: '2026-11-05' })).body.id;
+
+        // Dos a la vez: una a las 10:00 de hoy, la otra pasa a mañana (cuenta como aplazada)
+        const res = await yo.patch('/api/tareas/horario', { cambios: [
+            { id: a, fecha_limite: '2026-11-05', hora_limite: '10:00' },
+            { id: b, fecha_limite: '2026-11-06', hora_limite: '09:30' },
+        ] });
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual(res.body.actualizadas, 2);
+        const tareaA = await buscarTarea(yo, a);
+        const tareaB = await buscarTarea(yo, b);
+        assert.strictEqual(tareaA.hora_limite, '10:00:00');
+        assert.strictEqual(tareaA.veces_aplazada, 0);
+        assert.strictEqual(tareaB.fecha_limite, '2026-11-06');
+        assert.strictEqual(tareaB.hora_limite, '09:30:00');
+        assert.strictEqual(tareaB.veces_aplazada, 1);
+        const [[{ movidas }]] = await dbTareas.query(
+            "SELECT COUNT(*) AS movidas FROM tarea_eventos WHERE tarea_id = ? AND tipo = 'movida'", [b]
+        );
+        assert.strictEqual(movidas, 1);
+
+        // Si una es de otra persona, NO se mueve ninguna (ni la mía)
+        const mezcla = await yo.patch('/api/tareas/horario', { cambios: [
+            { id: a, fecha_limite: '2026-11-05', hora_limite: '18:00' },
+            { id: ajena, fecha_limite: '2026-11-05', hora_limite: '18:30' },
+        ] });
+        assert.strictEqual(mezcla.status, 404);
+        assert.strictEqual((await buscarTarea(yo, a)).hora_limite, '10:00:00');
+        assert.strictEqual((await buscarTarea(otro, ajena)).hora_limite, null);
+
+        // Datos imposibles
+        for (const malo of [
+            {}, { cambios: [] }, { cambios: 'todas' },
+            { cambios: [{ id: a, fecha_limite: '2026-02-30', hora_limite: '10:00' }] },
+            { cambios: [{ id: a, fecha_limite: '2026-11-05', hora_limite: '25:00' }] },
+            { cambios: [{ id: 'abc', fecha_limite: '2026-11-05', hora_limite: '10:00' }] },
+            { cambios: [{ id: a, fecha_limite: '2026-11-05', hora_limite: '10:00' }, { id: a, fecha_limite: '2026-11-05', hora_limite: '11:00' }] },
+            { cambios: Array.from({ length: 51 }, (_, i) => ({ id: i + 1, fecha_limite: '2026-11-05', hora_limite: '10:00' })) },
+        ]) {
+            const r = await yo.patch('/api/tareas/horario', malo);
+            assert.strictEqual(r.status, 400, `debería rechazar ${JSON.stringify(malo).slice(0, 80)}`);
+        }
+    });
+
     await t.test('borrar la tarea deja constancia en el historial', async () => {
         assert.strictEqual((await otro.delete(`/api/tareas/${idTarea}`)).status, 404);
         assert.strictEqual((await yo.delete(`/api/tareas/${idTarea}`)).status, 200);
@@ -309,7 +356,7 @@ test('rutas nuevas de Tachit de principio a fin', opciones, async (t) => {
 test('rutas nuevas sin token devuelven 401', async () => {
     for (const [metodo, url] of [
         ['get', '/api/categorias'], ['post', '/api/subtareas'], ['get', '/api/ajustes'], ['put', '/api/tareas/1/categorias'],
-        ['patch', '/api/tareas/1/estado'],
+        ['patch', '/api/tareas/1/estado'], ['patch', '/api/tareas/horario'],
     ]) {
         assert.strictEqual((await request(app)[metodo](url)).status, 401, `${metodo} ${url}`);
     }

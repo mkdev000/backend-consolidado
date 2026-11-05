@@ -189,6 +189,24 @@ const esquemaEstadoTarea = z.object({
     hoy: opcionalConFormato(z.iso.date, 'La fecha de hoy no es válida (formato AAAA-MM-DD)'),
 });
 
+// Cambiar el día y la hora de VARIAS tareas a la vez (PATCH /api/tareas/horario, Fase 7, paso 7.2).
+// Lo usan "Reorganizar mi día", "Planificar", "Separar" y arrastrar un bloque en la línea de tiempo.
+// Como mucho 50 cambios por petición, y cada tarea una sola vez (si no, ¿cuál de las dos horas vale?).
+const esquemaHorario = z.object({
+    cambios: z
+        .array(
+            z.object({
+                id: z.number({ error: 'Falta la tarea' }).int().positive('Falta la tarea').max(2147483647, 'Falta la tarea'),
+                fecha_limite: z.iso.date({ error: 'La fecha no es válida (formato AAAA-MM-DD)' }),
+                hora_limite: z.iso.time({ error: 'La hora no es válida (formato HH:MM)' }),
+            }),
+            { error: 'Faltan los cambios' }
+        )
+        .min(1, 'No hay nada que cambiar')
+        .max(50, 'Como mucho 50 tareas a la vez')
+        .refine((lista) => new Set(lista.map((c) => c.id)).size === lista.length, 'Una tarea aparece dos veces'),
+});
+
 // ---------- Subtareas ----------
 
 const tituloSubtarea = z
@@ -282,6 +300,7 @@ module.exports = {
     esquemaTarea,
     esquemaTareaCrear,
     esquemaEstadoTarea,
+    esquemaHorario,
     esquemaSubtareaCrear,
     esquemaSubtareaCambiar,
     esquemaCategoriaCrear,

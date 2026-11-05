@@ -3,7 +3,7 @@ const router = express.Router();
 const { dbTareas } = require('../../db');
 const verificarToken = require('../middleware/verificarToken');
 const validar = require('../middleware/validar');
-const { esquemaTarea, esquemaTareaCrear, esquemaEstadoTarea, esquemaCategoriasDeTarea } = require('../validacion/esquemas');
+const { esquemaTarea, esquemaTareaCrear, esquemaEstadoTarea, esquemaHorario, esquemaCategoriasDeTarea } = require('../validacion/esquemas');
 const { leerId, registrarError, enTransaccion } = require('../utilidades');
 const { siguienteFecha } = require('../repeticion');
 
@@ -184,6 +184,56 @@ router.put('/:id', validar(esquemaTarea), async (req, res) => {
     } catch (error) {
         registrarError('tareas/editar', error);
         res.status(500).json({ mensaje: 'Error al actualizar la tarea' });
+    }
+});
+
+// ---------- Cambiar el día y la hora de VARIAS tareas MÍAS a la vez (Fase 7, paso 7.2) ----------
+// Llega { cambios: [{ id, fecha_limite, hora_limite }, ...] }. Todo en UNA transacción:
+// o se mueven todas, o ninguna (si una no es tuya, no se mueve nada). Así "Reorganizar mi día"
+// nunca deja el día a medias. Igual que al editar: si una tarea pasa a un día posterior,
+// cuenta como "aplazada" y queda en el historial como "movida".
+// Va ANTES de las rutas con :id para que nadie confunda "horario" con un número de tarea.
+router.patch('/horario', validar(esquemaHorario), async (req, res) => {
+    const userId = req.usuario.id;
+    // Ordenadas por id: si dos peticiones tocan las mismas tareas, las bloquean en el mismo orden (menos atascos)
+    const cambios = [...req.datos.cambios].sort((a, b) => a.id - b.id);
+    const ids = cambios.map((c) => c.id);
+
+    try {
+        const resultado = await enTransaccion(dbTareas, async (conexion) => {
+            // FOR UPDATE: nadie más puede cambiar estas tareas hasta que terminemos
+            const [filas] = await conexion.query(
+                'SELECT id, fecha_limite FROM tareas WHERE user_id = ? AND id IN (?) ORDER BY id FOR UPDATE',
+                [userId, ids]
+            );
+            // Alguna no existe o es de otra persona: no se toca NADA (y no decimos cuál, por seguridad)
+            if (filas.length !== ids.length) return null;
+
+            const fechaDe = new Map(filas.map((f) => [f.id, f.fecha_limite]));
+            for (const { id, fecha_limite: fechaNueva, hora_limite: hora } of cambios) {
+                const fechaAntes = fechaDe.get(id);
+                // Igual que en el PUT: solo cuenta como "movida" si ya tenía día y cambia a otro
+                const cambiaFecha = Boolean(fechaAntes) && fechaAntes !== fechaNueva;
+                const aplazada = cambiaFecha && fechaNueva > fechaAntes;
+                await conexion.query(
+                    `UPDATE tareas SET fecha_limite = ?, hora_limite = ?${aplazada ? ', veces_aplazada = veces_aplazada + 1' : ''}
+                     WHERE id = ? AND user_id = ?`,
+                    [fechaNueva, hora, id, userId]
+                );
+                if (cambiaFecha) {
+                    await registrarEvento(conexion, {
+                        userId, tareaId: id, tipo: 'movida', fechaAnterior: fechaAntes, fechaNueva,
+                    });
+                }
+            }
+            return cambios.length;
+        });
+
+        if (resultado === null) return res.status(404).json({ mensaje: 'Alguna tarea no existe' });
+        res.json({ mensaje: 'Horario actualizado', actualizadas: resultado });
+    } catch (error) {
+        registrarError('tareas/horario', error);
+        res.status(500).json({ mensaje: 'Error al cambiar el horario' });
     }
 });
 
