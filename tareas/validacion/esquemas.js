@@ -207,6 +207,62 @@ const esquemaHorario = z.object({
         .refine((lista) => new Set(lista.map((c) => c.id)).size === lista.length, 'Una tarea aparece dos veces'),
 });
 
+// ---------- Mi ritmo (Fase 9, paso 9.2) ----------
+
+// Lo que has tardado de verdad en una tarea tachada (PATCH /api/tareas/:id/minutos-reales).
+// De 1 minuto a 12 horas; null = "no lo sé / quítalo". Es obligatorio enviarlo (aunque sea null).
+const esquemaMinutosReales = z.object({
+    minutos_reales: z
+        .number({ error: 'Los minutos tienen que ser un número' })
+        .int('Los minutos tienen que ser un número entero')
+        .min(1, 'Como poco, 1 minuto')
+        .max(720, 'Como mucho, 12 horas')
+        .nullable(),
+});
+
+const DIA_MS = 24 * 60 * 60 * 1000;
+const diasEntre = (desde, hasta) => Math.round((Date.parse(hasta) - Date.parse(desde)) / DIA_MS);
+const esLunes = (fecha) => new Date(`${fecha}T00:00:00Z`).getUTCDay() === 1;
+
+// Qué días quieres ver en Mi ritmo (GET /api/ritmo?desde=AAAA-MM-DD&hasta=AAAA-MM-DD).
+// Llegan en la URL; los dos son opcionales (si faltan, la ruta pone las últimas 8 semanas).
+// Como mucho un año de golpe, para que nadie pida "todo desde 1900" y atasque el servidor.
+const fechaDeLaUrl = z.iso.date({ error: 'La fecha no es válida (formato AAAA-MM-DD)' }).optional();
+const esquemaRitmo = z
+    .object({ desde: fechaDeLaUrl, hasta: fechaDeLaUrl })
+    .refine((d) => !d.desde || !d.hasta || d.desde <= d.hasta, { message: '"desde" tiene que ir antes que "hasta"', path: ['desde'] })
+    .refine((d) => !d.desde || !d.hasta || diasEntre(d.desde, d.hasta) <= 366, { message: 'Como mucho puedes ver un año de golpe', path: ['desde'] });
+
+// Cerrar la semana en 3 pasos (POST /api/ritmo/cierres):
+//   semana_inicio      el lunes de la semana que cierras
+//   completadas        cuántas tachaste (paso 1; lo cuenta la app en tu hora)
+//   pasar_al_lunes     las pendientes que pasas al lunes siguiente (paso 2; como mucho 100, sin repetir)
+//   foco_categoria_id  la categoría en la que te centras la semana que viene (paso 3; o null)
+const esquemaCierreSemana = z.object({
+    semana_inicio: z
+        .iso.date({ error: 'La semana no es válida (formato AAAA-MM-DD)' })
+        .refine(esLunes, 'La semana tiene que empezar en lunes')
+        // No se puede cerrar una semana que aún no ha empezado (un día de margen por las zonas horarias)
+        .refine((f) => Date.parse(f) <= Date.now() + DIA_MS, 'Esa semana todavía no ha empezado'),
+    completadas: z
+        .number({ error: 'Las tareas hechas tienen que ser un número' })
+        .int()
+        .min(0)
+        .max(1000, 'Demasiadas tareas hechas para una semana'),
+    pasar_al_lunes: z
+        .array(z.number().int().positive().max(2147483647), { error: 'Las tareas que pasas al lunes no son válidas' })
+        .max(100, 'Como mucho puedes pasar 100 tareas al lunes')
+        .default([])
+        .transform((ids) => [...new Set(ids)].sort((a, b) => a - b)),
+    foco_categoria_id: z
+        .number({ error: 'La categoría del foco no es válida' })
+        .int()
+        .positive()
+        .max(2147483647)
+        .nullable()
+        .default(null),
+});
+
 // ---------- Subtareas ----------
 
 const tituloSubtarea = z
@@ -307,6 +363,9 @@ module.exports = {
     esquemaCategoriaCambiar,
     esquemaCategoriasDeTarea,
     esquemaAjustes,
+    esquemaMinutosReales,
+    esquemaRitmo,
+    esquemaCierreSemana,
     ESTADOS,
     PRIORIDADES,
     ICONOS,
