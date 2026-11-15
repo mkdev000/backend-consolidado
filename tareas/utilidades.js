@@ -44,7 +44,16 @@ async function enTransaccion(db, trabajo) {
     }
 }
 
+// Apunta un hecho en el historial (creada, completada, reabierta, movida, borrada).
+// Lo usan las tareas y el cierre de semana de Mi ritmo; de este historial sale todo Mi ritmo.
+function registrarEvento(conexion, { userId, tareaId, tipo, fechaAnterior = null, fechaNueva = null }) {
+    return conexion.query(
+        'INSERT INTO tarea_eventos (user_id, tarea_id, tipo, fecha_anterior, fecha_nueva) VALUES (?, ?, ?, ?, ?)',
+        [userId, tareaId, tipo, fechaAnterior, fechaNueva]
+    );
+}
+
 // Colores de las categorías nuevas, por turnos (PALETTE del prototipo)
 const PALETA_CATEGORIAS = ['#17699e', '#6d4fc9', '#1b7a50', '#9a5b00', '#b83a70', '#0e6f78'];
 
-module.exports = { leerId, registrarError, enTransaccion, PALETA_CATEGORIAS };
+module.exports = { leerId, registrarError, enTransaccion, registrarEvento, PALETA_CATEGORIAS };
