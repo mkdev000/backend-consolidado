@@ -3,8 +3,10 @@ const router = express.Router();
 const { dbTareas } = require('../../db');
 const verificarToken = require('../middleware/verificarToken');
 const validar = require('../middleware/validar');
-const { esquemaTarea, esquemaTareaCrear, esquemaEstadoTarea, esquemaHorario, esquemaCategoriasDeTarea } = require('../validacion/esquemas');
-const { leerId, registrarError, enTransaccion } = require('../utilidades');
+const {
+    esquemaTarea, esquemaTareaCrear, esquemaEstadoTarea, esquemaHorario, esquemaCategoriasDeTarea, esquemaMinutosReales,
+} = require('../validacion/esquemas');
+const { leerId, registrarError, enTransaccion, registrarEvento } = require('../utilidades');
 const { siguienteFecha } = require('../repeticion');
 
 // Todas las rutas de este archivo necesitan sesión
@@ -21,14 +23,6 @@ const textoADias = (texto) => (texto ? texto.split(',').map(Number) : null);
 // Prepara una tarea para enviarla al cliente: días como lista, subtareas y categorías dentro
 function formatearTarea(fila, subtareas = [], categorias = []) {
     return { ...fila, dias_semana: textoADias(fila.dias_semana), subtareas, categorias };
-}
-
-// Apunta un hecho en el historial (creada, completada, reabierta, movida, borrada)
-function registrarEvento(conexion, { userId, tareaId, tipo, fechaAnterior = null, fechaNueva = null }) {
-    return conexion.query(
-        'INSERT INTO tarea_eventos (user_id, tarea_id, tipo, fecha_anterior, fecha_nueva) VALUES (?, ?, ?, ?, ?)',
-        [userId, tareaId, tipo, fechaAnterior, fechaNueva]
-    );
 }
 
 // Si la repetición deja de ser semanal, los días ya no tienen sentido: se vacían
@@ -307,6 +301,38 @@ router.patch('/:id/estado', validar(esquemaEstadoTarea), async (req, res) => {
     } catch (error) {
         registrarError('tareas/estado', error);
         res.status(500).json({ mensaje: 'Error al cambiar el estado de la tarea' });
+    }
+});
+
+// ---------- Apuntar cuánto has tardado de verdad en una tarea MÍA (Fase 9, paso 9.2) ----------
+// Al tachar, el aviso pregunta "¿Cuánto has tardado? 15' · 30' · 1 h · lo previsto".
+// Solo llega { minutos_reales } (de 1 a 720, o null para quitarlo) y solo vale para tareas YA tachadas:
+// así Mi ritmo ("corregir mis tiempos") nunca se llena de tiempos de cosas que no has hecho.
+router.patch('/:id/minutos-reales', validar(esquemaMinutosReales), async (req, res) => {
+    const userId = req.usuario.id;
+    const tareaId = leerId(req.params.id);
+    if (tareaId === null) {
+        return res.status(400).json({ mensaje: 'Identificador de tarea no válido' });
+    }
+    const { minutos_reales: minutos } = req.datos;
+
+    try {
+        const [resultado] = await dbTareas.query(
+            "UPDATE tareas SET minutos_reales = ? WHERE id = ? AND user_id = ? AND estado = 'completada'",
+            [minutos, tareaId, userId]
+        );
+        if (resultado.affectedRows === 0) {
+            // ¿No existe (o es de otra persona) o es que aún no está tachada?
+            const [[tarea]] = await dbTareas.query('SELECT estado FROM tareas WHERE id = ? AND user_id = ?', [tareaId, userId]);
+            if (!tarea) return res.status(404).json({ mensaje: 'Tarea no encontrada' });
+            if (tarea.estado !== 'completada') {
+                return res.status(409).json({ mensaje: 'Primero tacha la tarea y luego apunta cuánto has tardado' });
+            }
+        }
+        res.json({ mensaje: 'Tiempo apuntado', minutos_reales: minutos });
+    } catch (error) {
+        registrarError('tareas/minutos-reales', error);
+        res.status(500).json({ mensaje: 'Error al apuntar el tiempo' });
     }
 });
 
