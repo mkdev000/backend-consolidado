@@ -5,6 +5,7 @@ const verificarToken = require('../middleware/verificarToken');
 const validar = require('../middleware/validar');
 const {
     esquemaTarea, esquemaTareaCrear, esquemaEstadoTarea, esquemaHorario, esquemaCategoriasDeTarea, esquemaMinutosReales,
+    esquemaDesatascar,
 } = require('../validacion/esquemas');
 const { leerId, registrarError, enTransaccion, registrarEvento } = require('../utilidades');
 const { siguienteFecha } = require('../repeticion');
@@ -333,6 +334,48 @@ router.patch('/:id/minutos-reales', validar(esquemaMinutosReales), async (req, r
     } catch (error) {
         registrarError('tareas/minutos-reales', error);
         res.status(500).json({ mensaje: 'Error al apuntar el tiempo' });
+    }
+});
+
+// ---------- «Hoy, sí»: traer a hoy una tarea MÍA que se me atasca (Fase 9, paso 9.5) ----------
+// Desde «Lo que se te atasca» de Mi ritmo. En una transacción:
+//  - la tarea pasa a hoy y SIN hora (así sale en «Notas sueltas» de Mi día, que te propone un hueco)
+//  - su contador de aplazamientos vuelve a 0: has decidido hacerla, ya no está atascada
+//  - queda en el historial como "movida" (si cambia de día), para que las estadísticas sigan cuadrando
+// Solo vale para tareas pendientes (una tachada no se atasca).
+router.patch('/:id/desatascar', validar(esquemaDesatascar), async (req, res) => {
+    const userId = req.usuario.id;
+    const tareaId = leerId(req.params.id);
+    if (tareaId === null) {
+        return res.status(400).json({ mensaje: 'Identificador de tarea no válido' });
+    }
+    const { hoy } = req.datos;
+
+    try {
+        const resultado = await enTransaccion(dbTareas, async (conexion) => {
+            const [[tarea]] = await conexion.query(
+                'SELECT estado, fecha_limite FROM tareas WHERE id = ? AND user_id = ? FOR UPDATE',
+                [tareaId, userId]
+            );
+            if (!tarea) return 'no-existe';
+            if (tarea.estado !== 'pendiente') return 'no-pendiente';
+
+            await conexion.query(
+                'UPDATE tareas SET fecha_limite = ?, hora_limite = NULL, veces_aplazada = 0 WHERE id = ? AND user_id = ?',
+                [hoy, tareaId, userId]
+            );
+            if (tarea.fecha_limite && tarea.fecha_limite !== hoy) {
+                await registrarEvento(conexion, { userId, tareaId, tipo: 'movida', fechaAnterior: tarea.fecha_limite, fechaNueva: hoy });
+            }
+            return 'ok';
+        });
+
+        if (resultado === 'no-existe') return res.status(404).json({ mensaje: 'Tarea no encontrada' });
+        if (resultado === 'no-pendiente') return res.status(409).json({ mensaje: 'Esa tarea ya está tachada' });
+        res.json({ mensaje: 'Tarea para hoy', fecha_limite: hoy });
+    } catch (error) {
+        registrarError('tareas/desatascar', error);
+        res.status(500).json({ mensaje: 'Error al pasar la tarea a hoy' });
     }
 });
 

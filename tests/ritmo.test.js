@@ -126,6 +126,33 @@ test('Mi ritmo de principio a fin', opciones, async (t) => {
         assert.deepStrictEqual((await otro.get('/api/ritmo')).body.atascadas, []);
     });
 
+    await t.test('«Hoy, sí»: la tarea atascada pasa a hoy, sin hora y deja de estar atascada', async () => {
+        const id = await crear(yo, { titulo: 'Ordenar el trastero', fecha_limite: '2026-11-02', hora_limite: '18:00' });
+        for (const fecha of ['2026-11-04', '2026-11-06', '2026-11-09']) {
+            await yo.patch('/api/tareas/horario', { cambios: [{ id, fecha_limite: fecha, hora_limite: '18:00' }] });
+        }
+        assert.ok((await yo.get('/api/ritmo')).body.atascadas.some((a) => a.id === id));
+
+        // Otra persona no puede
+        assert.strictEqual((await otro.patch(`/api/tareas/${id}/desatascar`, { hoy: '2026-11-19' })).status, 404);
+
+        const res = await yo.patch(`/api/tareas/${id}/desatascar`, { hoy: '2026-11-19' });
+        assert.strictEqual(res.status, 200);
+        const tarea = await buscar(yo, id);
+        assert.strictEqual(tarea.fecha_limite, '2026-11-19');
+        assert.strictEqual(tarea.hora_limite, null);
+        assert.strictEqual(tarea.veces_aplazada, 0);
+        assert.ok(!(await yo.get('/api/ritmo')).body.atascadas.some((a) => a.id === id), 'ya no sale en lo que se te atasca');
+
+        // Tachada: no se puede; datos raros: no
+        await tachar(yo, id);
+        assert.strictEqual((await yo.patch(`/api/tareas/${id}/desatascar`, { hoy: '2026-11-19' })).status, 409);
+        for (const malo of [{}, { hoy: 'hoy' }, { hoy: '2026-02-30' }]) {
+            assert.strictEqual((await yo.patch(`/api/tareas/${id}/desatascar`, malo)).status, 400);
+        }
+        assert.strictEqual((await yo.patch('/api/tareas/abc/desatascar', { hoy: '2026-11-19' })).status, 400);
+    });
+
     await t.test('cerrar la semana: pasa al lunes, apunta el foco y es todo o nada', async () => {
         const salud = (await yo.post('/api/categorias', { nombre: 'Salud' })).body.categoria.id;
         const deLeo = (await otro.post('/api/categorias', { nombre: 'Casa' })).body.categoria.id;
@@ -180,7 +207,7 @@ test('Mi ritmo de principio a fin', opciones, async (t) => {
 });
 
 test('Mi ritmo sin token devuelve 401', async () => {
-    for (const [metodo, url] of [['get', '/api/ritmo'], ['post', '/api/ritmo/cierres'], ['patch', '/api/tareas/1/minutos-reales']]) {
+    for (const [metodo, url] of [['get', '/api/ritmo'], ['post', '/api/ritmo/cierres'], ['patch', '/api/tareas/1/minutos-reales'], ['patch', '/api/tareas/1/desatascar']]) {
         assert.strictEqual((await request(app)[metodo](url)).status, 401, `${metodo} ${url}`);
     }
 });

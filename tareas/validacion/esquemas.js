@@ -211,6 +211,12 @@ const esquemaHorario = z.object({
 
 // Lo que has tardado de verdad en una tarea tachada (PATCH /api/tareas/:id/minutos-reales).
 // De 1 minuto a 12 horas; null = "no lo sé / quítalo". Es obligatorio enviarlo (aunque sea null).
+// «Hoy, sí» de «Lo que se te atasca» (PATCH /api/tareas/:id/desatascar): solo llega el día de hoy del usuario
+// (en SU hora: el servidor está en UTC y, entre las 00:00 y las 01:00 de España, su "hoy" sería todavía ayer).
+const esquemaDesatascar = z.object({
+    hoy: z.iso.date({ error: 'La fecha de hoy no es válida (formato AAAA-MM-DD)' }),
+});
+
 const esquemaMinutosReales = z.object({
     minutos_reales: z
         .number({ error: 'Los minutos tienen que ser un número' })
@@ -364,6 +370,7 @@ module.exports = {
     esquemaCategoriasDeTarea,
     esquemaAjustes,
     esquemaMinutosReales,
+    esquemaDesatascar,
     esquemaRitmo,
     esquemaCierreSemana,
     ESTADOS,
